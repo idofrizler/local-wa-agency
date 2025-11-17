@@ -176,31 +176,63 @@ class WhatsAppScanner:
                     await self.page.keyboard.press("Control+Alt+/")
                     await asyncio.sleep(1)
                 
+                # Clear any existing text with select all + delete
+                # Use Command on macOS, Control on other platforms
+                import platform
+                select_all_key = "Meta+a" if platform.system() == "Darwin" else "Control+a"
+                await self.page.keyboard.press(select_all_key)
+                await asyncio.sleep(0.3)
+                await self.page.keyboard.press("Backspace")
+                await asyncio.sleep(0.5)
+                
                 # Type group name
                 print(f"  Typing group name: {group_name}")
                 await self.page.keyboard.type(group_name)
                 await asyncio.sleep(3)  # Give time for search results
                 
-                # Press Enter to open first result
-                print(f"  Pressing Enter to open group...")
-                await self.page.keyboard.press("Enter")
-                await asyncio.sleep(5)  # Give time for chat to load
-            
-            # Verify we're in the correct chat
-            chat_header = await self.page.locator('[data-testid="conversation-header"]').count()
-            if chat_header > 0:
-                # Check if the header actually contains the group name
-                header_text = await self.page.locator('[data-testid="conversation-header"]').inner_text()
-                if group_name in header_text:
-                    print(f"  ✓ Successfully opened group chat: {group_name}")
+                # Check if we got the "No chats, contacts or messages found" message
+                no_results = await self.page.locator('text=/No chats, contacts or messages found/i').count()
+                if no_results > 0:
+                    raise ValueError(f"No search results found for group '{group_name}'")
+                
+                # Try to click on the first search result
+                print(f"  Looking for first search result...")
+                first_result = self.page.locator(f'span[title="{group_name}"]').first
+                result_count = await first_result.count()
+                
+                if result_count > 0:
+                    print(f"  Clicking on search result...")
+                    await first_result.click()
+                    await asyncio.sleep(2)
                 else:
-                    raise ValueError(f"Opened chat but it's not '{group_name}'. Header shows: {header_text[:50]}")
+                    # Fallback: Try pressing Enter
+                    print(f"  Search result not found, trying Enter key...")
+                    await self.page.keyboard.press("Enter")
+                    await asyncio.sleep(2)
+            
+            # Wait for chat to load
+            print(f"  Waiting for chat to load...")
+            await asyncio.sleep(3)  # Give it time to load
+            
+            # Check if chat loaded by looking for message containers
+            # Note: WhatsApp uses div[data-id] for messages, not [data-testid="msg-container"]
+            msg_count = await self.page.locator('div[data-id]').count()
+            
+            if msg_count > 0:
+                print(f"  ✓ Chat loaded successfully (found {msg_count} messages)")
             else:
-                raise ValueError(f"Could not open chat for group '{group_name}'")
+                # Could be an empty chat - check if we're at least in a conversation view
+                # by looking for the message input box
+                input_box = await self.page.locator('[data-testid="conversation-compose-box-input"]').count()
+                if input_box > 0:
+                    print(f"  ✓ Chat loaded (empty chat, no messages yet)")
+                else:
+                    raise ValueError(f"Chat did not load for group '{group_name}'")
             
         except Exception as e:
             print(f"  ✗ Error navigating to group: {str(e)}")
             await asyncio.sleep(2)
+            raise  # Re-raise the exception to stop processing this group
     
     async def _extract_messages(self, group_name: str) -> List[Message]:
         """Extract messages from the current chat."""

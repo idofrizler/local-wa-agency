@@ -23,7 +23,7 @@ def print_banner():
     print(f"{'WhatsApp Multi-Scenario Group Monitor':^80}")
     print(f"{'='*80}{Style.RESET_ALL}\n")
 
-async def analyze_messages(messages: List[Message], group_name: str, scenario: ScenarioDefinition):
+async def analyze_messages(messages: List[Message], group_name: str, scenario: ScenarioDefinition, limit: int = None):
     """
     Analyze messages with AI agent and return structured results.
     
@@ -31,12 +31,17 @@ async def analyze_messages(messages: List[Message], group_name: str, scenario: S
         messages: List of messages to analyze
         group_name: Name of the WhatsApp group
         scenario: ScenarioDefinition guiding the analysis
+        limit: Maximum number of messages to analyze (None for no limit)
         
     Returns:
         List of analysis results (Pydantic model instances)
     """
     if not messages:
         return []
+    
+    # Apply limit if specified
+    if limit and limit > 0:
+        messages = messages[:limit]
     
     agent = get_agent_for_scenario(scenario)
     results = []
@@ -83,7 +88,7 @@ async def analyze_messages(messages: List[Message], group_name: str, scenario: S
     print(f"  {Fore.GREEN}✓{Style.RESET_ALL} Analysis complete for {group_name}")
     return results
 
-async def scan_groups(groups: List[str], scroll_count: int, output_format: str = "json"):
+async def scan_groups(groups: List[str], scroll_count: int, output_format: str = "json", limit: int = None):
     """
     Scan groups and output structured insights.
     
@@ -91,6 +96,7 @@ async def scan_groups(groups: List[str], scroll_count: int, output_format: str =
         groups: List of group names to scan
         scroll_count: Number of times to scroll up in each group
         output_format: Output format ('json' or 'pretty')
+        limit: Maximum number of messages to analyze per group (None for no limit)
     """
     print(f"{Fore.YELLOW}Scanning {len(groups)} group(s)...{Style.RESET_ALL}")
     print(f"Scroll count: {scroll_count}\n")
@@ -103,14 +109,25 @@ async def scan_groups(groups: List[str], scroll_count: int, output_format: str =
         
         # Scan each group
         for group in groups:
-            scenario = config.get_scenario_for_group(group)
-            if not scenario:
-                print(f"{Fore.YELLOW}Warning: No scenario configured for group '{group}', skipping{Style.RESET_ALL}")
+            try:
+                scenario = config.get_scenario_for_group(group)
+                if not scenario:
+                    print(f"{Fore.YELLOW}⚠ Warning: No scenario configured for group '{group}', skipping{Style.RESET_ALL}\n")
+                    continue
+                    
+                messages = await scanner.scan_group_history(group, scroll_count)
+                results = await analyze_messages(messages, group, scenario, limit)
+                all_results.extend(results)
+            
+            except ValueError as e:
+                # Group not found or couldn't be opened
+                print(f"{Fore.YELLOW}⚠ Skipping group '{group}': {str(e)}{Style.RESET_ALL}\n")
                 continue
-                
-            messages = await scanner.scan_group_history(group, scroll_count)
-            results = await analyze_messages(messages, group, scenario)
-            all_results.extend(results)
+            
+            except Exception as e:
+                # Other errors - log and continue
+                print(f"{Fore.RED}✗ Error processing group '{group}': {str(e)}{Style.RESET_ALL}\n")
+                continue
         
         # Output results
         print(f"\n{Fore.CYAN}{'='*80}{Style.RESET_ALL}")
@@ -178,6 +195,13 @@ Examples:
         help='Specific groups to scan (default: all configured groups)'
     )
     
+    parser.add_argument(
+        '--limit',
+        type=int,
+        default=None,
+        help='Maximum number of messages to analyze per group (default: no limit)'
+    )
+    
     args = parser.parse_args()
     
     # Print banner
@@ -207,7 +231,7 @@ Examples:
     
     # Run scan
     try:
-        asyncio.run(scan_groups(groups, args.scrolls, args.output))
+        asyncio.run(scan_groups(groups, args.scrolls, args.output, args.limit))
     except Exception as e:
         print(f"\n{Fore.RED}Unexpected error: {str(e)}{Style.RESET_ALL}")
         import traceback
