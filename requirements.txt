@@ -1,0 +1,6 @@
+playwright
+requests
+python-dotenv
+agent-framework
+pydantic
+colorama
