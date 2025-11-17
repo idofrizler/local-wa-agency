@@ -1,0 +1,25 @@
+{
+  "prompt": "Your agent instructions here...",
+  "groups": ["Group Name 1", "Group Name 2"],
+  "confidence_field": "confidence",
+  "reasoning_field": "reasoning",
+  "response_schema": {
+    "type": "object",
+    "properties": {
+      "field1": {
+        "type": "string",
+        "description": "Description of field1"
+      },
+      "confidence": {
+        "type": "string",
+        "enum": ["HIGH", "MEDIUM", "LOW"],
+        "description": "Confidence level"
+      },
+      "reasoning": {
+        "type": "string",
+        "description": "Explanation of the analysis"
+      }
+    },
+    "required": ["field1", "confidence", "reasoning"]
+  }
+}

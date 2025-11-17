@@ -3,9 +3,9 @@ GUI display for WhatsApp Padel Match Tracker with Hebrew RTL support.
 """
 import tkinter as tk
 from tkinter import ttk
-from typing import List, Literal
+from typing import List
 from datetime import datetime, timedelta
-from src.models import Match
+from test_apps.padel import Match
 
 class MatchDisplayWindow:
     """GUI window to display matches in a Hebrew RTL table."""

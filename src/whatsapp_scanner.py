@@ -4,10 +4,16 @@ WhatsApp scanner for multiple groups with message extraction.
 import re
 import time
 import asyncio
+from enum import Enum
 from typing import List, Dict, Set, Optional
 from datetime import datetime
 from playwright.async_api import async_playwright, Page, TimeoutError as PlaywrightTimeoutError
 from src.config import config
+
+class ScanMode(Enum):
+    """Scanning mode for WhatsApp groups."""
+    HISTORY = "history"
+    LIVE = "live"
 
 class Message:
     """Simple message data structure."""
@@ -180,13 +186,17 @@ class WhatsAppScanner:
                 await self.page.keyboard.press("Enter")
                 await asyncio.sleep(5)  # Give time for chat to load
             
-            # Verify we're in a chat
+            # Verify we're in the correct chat
             chat_header = await self.page.locator('[data-testid="conversation-header"]').count()
             if chat_header > 0:
-                print(f"  ✓ Successfully opened group chat")
+                # Check if the header actually contains the group name
+                header_text = await self.page.locator('[data-testid="conversation-header"]').inner_text()
+                if group_name in header_text:
+                    print(f"  ✓ Successfully opened group chat: {group_name}")
+                else:
+                    raise ValueError(f"Opened chat but it's not '{group_name}'. Header shows: {header_text[:50]}")
             else:
-                print(f"  ⚠ Warning: Could not confirm chat was opened")
-                print(f"  Trying to check for messages anyway...")
+                raise ValueError(f"Could not open chat for group '{group_name}'")
             
         except Exception as e:
             print(f"  ✗ Error navigating to group: {str(e)}")

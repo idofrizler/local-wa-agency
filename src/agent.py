@@ -1,18 +1,20 @@
 """
-AI Agent wrapper for padel game analysis.
-Uses Microsoft Agent Framework with Ollama.
+Scenario-aware AI agent wrapper using Ollama.
 """
 import asyncio
 import requests
-from typing import Optional
-from agent_framework.openai import OpenAIChatClient
-from src.models import PadelGameAnalysis
-from src.config import config
+from typing import Dict, Optional
 
-class PadelAgent:
-    """Wrapper for the padel game analyzer agent."""
+from agent_framework.openai import OpenAIChatClient
+from pydantic import BaseModel
+
+from src.config import config, ScenarioDefinition
+
+class ScenarioAgent:
+    """Wraps an Ollama agent for a specific scenario."""
     
-    def __init__(self):
+    def __init__(self, scenario: ScenarioDefinition):
+        self.scenario = scenario
         self.agent = None
         self._initialized = False
     
@@ -21,29 +23,27 @@ class PadelAgent:
         if self._initialized:
             return
         
-        # Check if Ollama is running
         self._check_ollama_connection()
         
-        # Create chat client pointing to Ollama's OpenAI-compatible endpoint
         openai_compatible_url = f"{config.ollama_base_url}/v1"
         
         chat_client = OpenAIChatClient(
             model_id=config.ollama_model,
-            api_key="not-needed",  # Ollama doesn't require API key
+            api_key="not-needed",
             base_url=openai_compatible_url
         )
         
-        # Create the agent with structured output
+        # Use the dynamically created Pydantic model from scenario definition
         self.agent = chat_client.create_agent(
-            name="PadelAnalyzer",
-            instructions=config.get_agent_instructions(),
-            response_format=PadelGameAnalysis
+            name=f"{self.scenario.name.capitalize()}Analyzer",
+            instructions=self.scenario.prompt,
+            response_format=self.scenario.response_model
         )
         
         self._initialized = True
     
     def _check_ollama_connection(self):
-        """Check if Ollama is running and accessible."""
+        """Verify that Ollama is reachable."""
         try:
             response = requests.get(f"{config.ollama_base_url}/api/tags", timeout=5)
             if response.status_code != 200:
@@ -58,15 +58,15 @@ class PadelAgent:
                 f"Error: {str(e)}"
             )
     
-    async def analyze_message(self, message: str) -> Optional[PadelGameAnalysis]:
+    async def analyze_message(self, message: str) -> Optional[BaseModel]:
         """
-        Analyze a message to determine if it's a matching padel game invite.
+        Analyze a message through the scenario's agent.
         
         Args:
-            message: The WhatsApp message text to analyze
-            
+            message: WhatsApp message text
+        
         Returns:
-            PadelGameAnalysis object or None if analysis fails
+            Structured analysis Pydantic model or None
         """
         if not self._initialized:
             await self.initialize()
@@ -75,42 +75,14 @@ class PadelAgent:
             result = await self.agent.run(message)
             return result.value
         except Exception as e:
-            print(f"Error analyzing message: {str(e)}")
+            print(f"Error analyzing message ({self.scenario.name}): {str(e)}")
             return None
-    
-    def analyze_message_sync(self, message: str) -> Optional[PadelGameAnalysis]:
-        """
-        Synchronous wrapper for analyze_message.
-        Creates a new event loop if needed.
-        
-        Args:
-            message: The WhatsApp message text to analyze
-            
-        Returns:
-            PadelGameAnalysis object or None if analysis fails
-        """
-        try:
-            # Try to get the current event loop
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # If loop is running, we need to create a new one in a thread
-                # For now, raise an error - caller should use async version
-                raise RuntimeError(
-                    "Cannot call analyze_message_sync from an async context. "
-                    "Use analyze_message instead."
-                )
-            else:
-                return loop.run_until_complete(self.analyze_message(message))
-        except RuntimeError:
-            # No event loop exists, create a new one
-            return asyncio.run(self.analyze_message(message))
 
-# Global agent instance
-_agent = None
+_agent_cache: Dict[str, ScenarioAgent] = {}
 
-def get_agent() -> PadelAgent:
-    """Get or create the global agent instance."""
-    global _agent
-    if _agent is None:
-        _agent = PadelAgent()
-    return _agent
+def get_agent_for_scenario(scenario: ScenarioDefinition) -> ScenarioAgent:
+    """Return a cached scenario agent."""
+    key = scenario.name
+    if key not in _agent_cache:
+        _agent_cache[key] = ScenarioAgent(scenario)
+    return _agent_cache[key]

@@ -1,267 +1,213 @@
 #!/usr/bin/env python3
 """
-WhatsApp Padel Match Tracker
-Main entry point for scanning WhatsApp groups and finding padel game matches.
+WhatsApp Multi-Scenario Group Monitor
+Generic main entry point that outputs structured insights from all configured scenarios.
 """
 import sys
-import time
 import asyncio
 import argparse
+import json
 from typing import List
-from colorama import Fore, Style
+from colorama import Fore, Style, init
 
-from src.config import config
-from src.agent import get_agent
-from src.match_tracker import MatchTracker
+from src.config import config, ScenarioDefinition
+from src.agent import get_agent_for_scenario
 from src.whatsapp_scanner import WhatsAppScanner, Message
-from src.models import Match, ScanMode
-from src.gui_display import MatchDisplayWindow
+
+# Initialize colorama
+init(autoreset=True)
 
 def print_banner():
     """Print application banner."""
     print(f"\n{Fore.CYAN}{'='*80}")
-    print(f"{'WhatsApp Padel Match Tracker':^80}")
+    print(f"{'WhatsApp Multi-Scenario Group Monitor':^80}")
     print(f"{'='*80}{Style.RESET_ALL}\n")
 
-def print_config_info():
-    """Print configuration information."""
-    print(f"{Fore.YELLOW}Configuration:{Style.RESET_ALL}")
-    print(f"  Ollama URL: {config.ollama_base_url}")
-    print(f"  Model: {config.ollama_model}")
-    print(f"  User Level: {config.user_preferences.level}")
-    print(f"  Time Window: {config.user_preferences.time_window[0]}:00-{config.user_preferences.time_window[1]}:00")
-    print()
-
-async def analyze_messages(messages: List[Message], group_name: str, tracker: MatchTracker, gui_window=None):
+async def analyze_messages(messages: List[Message], group_name: str, scenario: ScenarioDefinition):
     """
-    Analyze messages with AI agent and add matches to tracker.
+    Analyze messages with AI agent and return structured results.
     
     Args:
         messages: List of messages to analyze
         group_name: Name of the WhatsApp group
-        tracker: MatchTracker instance to store matches
-        gui_window: Optional GUI window to update with matches
+        scenario: ScenarioDefinition guiding the analysis
+        
+    Returns:
+        List of analysis results (Pydantic model instances)
     """
     if not messages:
-        return
+        return []
     
-    agent = get_agent()
-    await agent.initialize()
+    agent = get_agent_for_scenario(scenario)
+    results = []
     
-    print(f"\n{Fore.CYAN}Analyzing {len(messages)} messages from {group_name}...{Style.RESET_ALL}")
+    print(f"\n{Fore.CYAN}Analyzing {len(messages)} messages from {group_name} "
+          f"(scenario: {scenario.name})...{Style.RESET_ALL}")
     
     for i, msg in enumerate(messages, 1):
         print(f"  [{i}/{len(messages)}] Analyzing message from {msg.sender}...", end="\r")
         
         try:
             analysis = await agent.analyze_message(msg.text)
+            if analysis is None:
+                continue
             
-            if analysis and analysis.is_game_invite:
-                # Only track if it's actually a game invite
-                match = Match(
-                    timestamp=msg.timestamp,
-                    group_name=group_name,
-                    sender=msg.sender,
-                    phone_number=msg.phone_number,
-                    message=msg.text,
-                    confidence=analysis.confidence,
-                    analysis=analysis
-                )
-                tracker.add_match(match)
-                
-                # Add to GUI if provided
-                if gui_window:
-                    gui_window.add_match(match)
-                    gui_window.update()
-                
-                # Show immediate feedback for matches
-                color = tracker.get_confidence_color(analysis.confidence)
-                symbol = tracker.get_confidence_symbol(analysis.confidence)
-                print(f"  [{i}/{len(messages)}] {color}MATCH FOUND{Style.RESET_ALL} ({analysis.confidence} {symbol}) - {msg.sender}")
+            # Create result dict with message context and analysis
+            result = {
+                "message": {
+                    "timestamp": msg.timestamp,
+                    "group_name": group_name,
+                    "sender": msg.sender,
+                    "phone_number": msg.phone_number,
+                    "text": msg.text
+                },
+                "scenario": scenario.name,
+                "analysis": analysis.model_dump()
+            }
+            results.append(result)
+            
+            # Get confidence for colored output
+            confidence = getattr(analysis, scenario.confidence_field, "N/A")
+            confidence_color = {
+                "HIGH": Fore.GREEN,
+                "MEDIUM": Fore.YELLOW,
+                "LOW": Fore.RED
+            }.get(str(confidence), Fore.WHITE)
+            
+            print(f"  [{i}/{len(messages)}] {confidence_color}Analyzed{Style.RESET_ALL} "
+                  f"(confidence: {confidence}) - {msg.sender}")
         
         except Exception as e:
-            print(f"  [{i}/{len(messages)}] Error analyzing message: {str(e)}")
+            print(f"  [{i}/{len(messages)}] {Fore.RED}Error:{Style.RESET_ALL} {str(e)}")
     
     print(f"  {Fore.GREEN}✓{Style.RESET_ALL} Analysis complete for {group_name}")
+    return results
 
-async def scan_history_mode(groups: List[str], scroll_count: int):
+async def scan_groups(groups: List[str], scroll_count: int, output_format: str = "json"):
     """
-    Scan historical messages from groups.
+    Scan groups and output structured insights.
     
     Args:
         groups: List of group names to scan
         scroll_count: Number of times to scroll up in each group
+        output_format: Output format ('json' or 'pretty')
     """
-    print(f"{Fore.YELLOW}Mode: Historical Scan{Style.RESET_ALL}")
-    print(f"Groups to scan: {', '.join(groups)}")
+    print(f"{Fore.YELLOW}Scanning {len(groups)} group(s)...{Style.RESET_ALL}")
     print(f"Scroll count: {scroll_count}\n")
     
     scanner = WhatsAppScanner()
-    tracker = MatchTracker()
-    
-    # Create GUI window
-    gui_window = MatchDisplayWindow(title="סריקת היסטוריה - מציאת משחקי פאדל")
+    all_results = []
     
     try:
         await scanner.start()
         
         # Scan each group
         for group in groups:
+            scenario = config.get_scenario_for_group(group)
+            if not scenario:
+                print(f"{Fore.YELLOW}Warning: No scenario configured for group '{group}', skipping{Style.RESET_ALL}")
+                continue
+                
             messages = await scanner.scan_group_history(group, scroll_count)
-            await analyze_messages(messages, group, tracker, gui_window)
+            results = await analyze_messages(messages, group, scenario)
+            all_results.extend(results)
         
-        # Show console summary
+        # Output results
         print(f"\n{Fore.CYAN}{'='*80}{Style.RESET_ALL}")
-        print(f"{Fore.GREEN}✓ Scan complete! Opening results window...{Style.RESET_ALL}")
-        print(f"Total matches found: {tracker.count()}")
+        print(f"{Fore.GREEN}✓ Scan complete!{Style.RESET_ALL}")
+        print(f"Total insights extracted: {len(all_results)}\n")
         
-        # Show GUI window (blocks until closed)
-        gui_window.show()
+        if output_format == "json":
+            print(json.dumps(all_results, indent=2, ensure_ascii=False))
+        else:
+            # Pretty print
+            for result in all_results:
+                print(f"{Fore.CYAN}{'='*80}{Style.RESET_ALL}")
+                print(f"{Fore.YELLOW}Group:{Style.RESET_ALL} {result['message']['group_name']}")
+                print(f"{Fore.YELLOW}Sender:{Style.RESET_ALL} {result['message']['sender']} ({result['message']['timestamp']})")
+                print(f"{Fore.YELLOW}Scenario:{Style.RESET_ALL} {result['scenario']}")
+                print(f"\n{Fore.YELLOW}Analysis:{Style.RESET_ALL}")
+                for key, value in result['analysis'].items():
+                    print(f"  {key}: {value}")
+                print()
         
     except KeyboardInterrupt:
         print(f"\n{Fore.YELLOW}Scan interrupted by user.{Style.RESET_ALL}")
-        gui_window.destroy()
     except Exception as e:
         print(f"\n{Fore.RED}Error: {str(e)}{Style.RESET_ALL}")
-        gui_window.destroy()
-    finally:
-        await scanner.cleanup()
-
-async def monitor_live_mode(groups: List[str], interval: int):
-    """
-    Monitor groups for new messages in real-time.
-    
-    Args:
-        groups: List of group names to monitor
-        interval: Seconds between checks
-    """
-    print(f"{Fore.YELLOW}Mode: Live Monitoring{Style.RESET_ALL}")
-    print(f"Groups to monitor: {', '.join(groups)}")
-    print(f"Check interval: {interval} seconds")
-    print(f"Press Ctrl+C to stop\n")
-    
-    scanner = WhatsAppScanner()
-    tracker = MatchTracker()
-    
-    # Create GUI window
-    gui_window = MatchDisplayWindow(title="ניטור חי - מציאת משחקי פאדל")
-    
-    try:
-        await scanner.start()
-        
-        # Initial scan to populate seen messages
-        print(f"{Fore.CYAN}Loading existing messages...{Style.RESET_ALL}")
-        for group in groups:
-            messages = await scanner.scan_group_history(group, scroll_count=3)
-            # Mark as seen but don't analyze
-            for msg in messages:
-                msg_id = scanner._get_message_id(msg)
-                scanner.seen_message_ids.add(msg_id)
-        
-        print(f"{Fore.GREEN}✓ Loaded existing messages. Now monitoring for new messages...{Style.RESET_ALL}\n")
-        print(f"{Fore.CYAN}Opening monitoring window... (Close window or press Ctrl+C to stop){Style.RESET_ALL}\n")
-        
-        # Monitor loop
-        check_count = 0
-        while True:
-            check_count += 1
-            print(f"\n{Fore.CYAN}Check #{check_count} - {time.strftime('%H:%M:%S')}{Style.RESET_ALL}")
-            
-            # Check each group
-            for group in groups:
-                new_messages = await scanner.scan_group_new_messages(group)
-                
-                if new_messages:
-                    print(f"  Found {len(new_messages)} new message(s) in {group}")
-                    await analyze_messages(new_messages, group, tracker, gui_window)
-                else:
-                    print(f"  No new messages in {group}")
-            
-            if check_count == 1 and tracker.count() == 0:
-                print(f"\n{Fore.YELLOW}No matches yet. Continuing to monitor...{Style.RESET_ALL}")
-            
-            # Update GUI
-            try:
-                gui_window.update()
-            except:
-                # Window was closed
-                print(f"\n{Fore.YELLOW}Window closed by user. Stopping monitor...{Style.RESET_ALL}")
-                break
-            
-            print(f"  Waiting {interval} seconds until next check...")
-            await asyncio.sleep(interval)
-    
-    except KeyboardInterrupt:
-        print(f"\n{Fore.YELLOW}Monitoring stopped by user.{Style.RESET_ALL}")
-        gui_window.destroy()
-    except Exception as e:
-        print(f"\n{Fore.RED}Error: {str(e)}{Style.RESET_ALL}")
-        gui_window.destroy()
+        import traceback
+        traceback.print_exc()
     finally:
         await scanner.cleanup()
 
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description="WhatsApp Padel Match Tracker - Find padel game matches in WhatsApp groups",
+        description="WhatsApp Multi-Scenario Group Monitor - Extract structured insights from WhatsApp groups",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  Scan historical messages (default 5 scrolls):
-    python main.py scan-history
+  Scan all configured groups:
+    python main.py --scrolls 5
   
-  Scan with custom scroll count:
-    python main.py scan-history --scrolls 10
+  Output as pretty-printed text:
+    python main.py --scrolls 5 --output pretty
   
-  Monitor for new messages (check every 60 seconds):
-    python main.py monitor-live
-  
-  Monitor with custom interval:
-    python main.py monitor-live --interval 30
+  Scan specific groups:
+    python main.py --scrolls 5 --groups "Group 1" "Group 2"
         """
-    )
-    
-    parser.add_argument(
-        'mode',
-        choices=['scan-history', 'monitor-live'],
-        help='Scanning mode: scan-history (review past messages) or monitor-live (watch for new messages)'
     )
     
     parser.add_argument(
         '--scrolls',
         type=int,
-        default=config.default_scroll_count,
-        help=f'Number of times to scroll up when loading history (default: {config.default_scroll_count})'
+        default=5,
+        help='Number of times to scroll up when loading history (default: 5)'
     )
     
     parser.add_argument(
-        '--interval',
-        type=int,
-        default=config.default_monitor_interval,
-        help=f'Seconds between checks in live mode (default: {config.default_monitor_interval})'
+        '--output',
+        choices=['json', 'pretty'],
+        default='json',
+        help='Output format (default: json)'
+    )
+    
+    parser.add_argument(
+        '--groups',
+        nargs='+',
+        help='Specific groups to scan (default: all configured groups)'
     )
     
     args = parser.parse_args()
     
     # Print banner
     print_banner()
-    print_config_info()
     
-    # Load groups from config
+    print(f"{Fore.YELLOW}Configuration:{Style.RESET_ALL}")
+    print(f"  Ollama URL: {config.ollama_base_url}")
+    print(f"  Model: {config.ollama_model}")
+    print(f"  Scenarios loaded: {len(config.scenario_definitions)}")
+    print()
+    
+    # Load groups
     try:
-        groups = config.load_groups()
-    except (FileNotFoundError, ValueError) as e:
+        if args.groups:
+            groups = args.groups
+            # Verify they're configured
+            for group in groups:
+                if group not in config.group_to_scenario:
+                    print(f"{Fore.YELLOW}Warning: Group '{group}' not found in configuration{Style.RESET_ALL}")
+        else:
+            groups = config.load_groups()
+    except ValueError as e:
         print(f"{Fore.RED}Configuration Error:{Style.RESET_ALL}")
         print(f"  {str(e)}")
-        print(f"\nPlease edit {config.groups_file} and add your WhatsApp group names (one per line).")
+        print(f"\nPlease add scenario JSON files to {config.scenarios_dir}")
         sys.exit(1)
     
-    # Run appropriate mode
+    # Run scan
     try:
-        if args.mode == 'scan-history':
-            asyncio.run(scan_history_mode(groups, args.scrolls))
-        elif args.mode == 'monitor-live':
-            asyncio.run(monitor_live_mode(groups, args.interval))
+        asyncio.run(scan_groups(groups, args.scrolls, args.output))
     except Exception as e:
         print(f"\n{Fore.RED}Unexpected error: {str(e)}{Style.RESET_ALL}")
         import traceback

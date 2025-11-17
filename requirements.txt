@@ -4,3 +4,4 @@ python-dotenv
 agent-framework
 pydantic
 colorama
+PyYAML

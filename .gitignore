@@ -1,4 +1,4 @@
 whatsapp_session/*
-config/groups.txt
-src/__pycache__/*
+scenarios/*.json
+**/__pycache__/*
 .venv/*
