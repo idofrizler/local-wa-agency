@@ -167,11 +167,17 @@ Examples:
   Scan all configured groups:
     python main.py --scrolls 5
   
+  Run only a specific scenario:
+    python main.py --scrolls 5 --scenario padel
+  
   Output as pretty-printed text:
     python main.py --scrolls 5 --output pretty
   
   Scan specific groups:
     python main.py --scrolls 5 --groups "Group 1" "Group 2"
+  
+  Limit messages per group:
+    python main.py --scrolls 10 --scenario third_grade --limit 20
         """
     )
     
@@ -196,6 +202,12 @@ Examples:
     )
     
     parser.add_argument(
+        '--scenario',
+        type=str,
+        help='Run only groups associated with this scenario (e.g., "padel", "third_grade")'
+    )
+    
+    parser.add_argument(
         '--limit',
         type=int,
         default=None,
@@ -215,12 +227,28 @@ Examples:
     
     # Load groups
     try:
+        if args.groups and args.scenario:
+            print(f"{Fore.RED}Error: Cannot specify both --groups and --scenario{Style.RESET_ALL}")
+            sys.exit(1)
+        
         if args.groups:
             groups = args.groups
             # Verify they're configured
             for group in groups:
                 if group not in config.group_to_scenario:
                     print(f"{Fore.YELLOW}Warning: Group '{group}' not found in configuration{Style.RESET_ALL}")
+        elif args.scenario:
+            # Filter groups by scenario
+            if args.scenario not in config.scenario_definitions:
+                print(f"{Fore.RED}Error: Scenario '{args.scenario}' not found{Style.RESET_ALL}")
+                print(f"\nAvailable scenarios:")
+                for scenario_name in config.scenario_definitions.keys():
+                    print(f"  - {scenario_name}")
+                sys.exit(1)
+            
+            scenario_def = config.scenario_definitions[args.scenario]
+            groups = scenario_def.groups
+            print(f"{Fore.CYAN}Running scenario '{args.scenario}' for {len(groups)} group(s){Style.RESET_ALL}")
         else:
             groups = config.load_groups()
     except ValueError as e:

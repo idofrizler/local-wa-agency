@@ -144,8 +144,11 @@ class WhatsAppScanner:
         try:
             print(f"  Looking for group in chat list...")
             
+            # Escape special characters in group name for CSS selector
+            escaped_group_name = self._escape_css_selector(group_name)
+            
             # Method 1: Try to find the group directly in the chat list
-            group_in_list = self.page.locator(f'span[title="{group_name}"]').first
+            group_in_list = self.page.locator(f'span[title="{escaped_group_name}"]').first
             if await group_in_list.count() > 0:
                 print(f"  Found group in chat list, clicking...")
                 await group_in_list.click()
@@ -197,7 +200,7 @@ class WhatsAppScanner:
                 
                 # Try to click on the first search result
                 print(f"  Looking for first search result...")
-                first_result = self.page.locator(f'span[title="{group_name}"]').first
+                first_result = self.page.locator(f'span[title="{escaped_group_name}"]').first
                 result_count = await first_result.count()
                 
                 if result_count > 0:
@@ -212,7 +215,7 @@ class WhatsAppScanner:
             
             # Wait for chat to load
             print(f"  Waiting for chat to load...")
-            await asyncio.sleep(3)  # Give it time to load
+            await asyncio.sleep(7)  # Give it time to load
             
             # Check if chat loaded by looking for message containers
             # Note: WhatsApp uses div[data-id] for messages, not [data-testid="msg-container"]
@@ -425,6 +428,19 @@ class WhatsAppScanner:
     def _get_message_id(self, message: Message) -> str:
         """Generate a unique ID for a message."""
         return hash(f"{message.sender}_{message.text[:50]}_{message.timestamp}")
+    
+    def _escape_css_selector(self, text: str) -> str:
+        """
+        Escape special characters in text for use in CSS selectors.
+        Handles quotes, backslashes, and other special CSS characters.
+        """
+        # Escape backslashes first
+        text = text.replace('\\', '\\\\')
+        # Escape double quotes
+        text = text.replace('"', '\\"')
+        # Escape single quotes
+        text = text.replace("'", "\\'")
+        return text
     
     async def cleanup(self):
         """Clean up resources."""
